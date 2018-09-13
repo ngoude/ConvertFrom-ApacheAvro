@@ -1,4 +1,4 @@
-﻿function ConvertFrom-ApacheAvro
+function ConvertFrom-ApacheAvro
 {
     <#
         .SYNOPSIS
@@ -16,8 +16,7 @@
         Converts the content of C:\BlobStorage\file from Apache Avro to custom objects.
 
         .EXAMPLE
-        $files = Get-ChildItem 'C:\BlobStorage' -Recurse -File
-        $files.FullName | ConvertFrom-ApacheAvro
+          dir C:\BlobStorage -Recurse -File | ConvertFrom-ApacheAvro
 
         Converts the content of all files in C:\BlobStorage from Apache Avro to custom objects.
     #>
@@ -25,27 +24,68 @@
         [parameter(Mandatory = $true,
             ValueFromPipeLine = $true,
             ValueFromPipeLineByPropertyName = $true)]
-        [string[]]$FilePath
+        [object]$FilePath
     )
     begin {
         $items = @()
     }
     process {
+        if ($FilePath -is [System.IO.FileInfo]) {
+            $FilePath = $FilePath.FullName
+        }
         foreach ($path in $FilePath) {
             [System.IO.FileStream]$stream = [System.IO.FIle]::Open($Path, [System.IO.FileMode]::Open)
             
             $reader = [Microsoft.Hadoop.Avro.Container.AvroContainer]::CreateGenericReader($stream)
             while ($reader.MoveNext()) {
                 foreach ($record in $reader.Current.Objects) {
-                    $bodyText = [System.Text.Encoding]::UTF8.GetString($record.Body)
-                    $items += "$bodyText"
+                    $item = New-Object PSObject -Property @{
+                        SystemProperties = @()
+                        AppProperties = @()
+                        Body = @()
+                    }
+                    if ($record.Body) {
+                        try {
+                            $body = [System.Text.Encoding]::UTF8.GetString($record.Body) | ConvertFrom-Json -ErrorAction Stop
+                        } 
+                        catch {
+                            $body = New-Object PSObject -Property @{
+                                StringValue =[System.Text.Encoding]::UTF8.GetString($record.Body)
+                            }
+                        }
+                        $bodyItem = New-Object PSObject
+                        foreach ($property in $body | Get-Member -MemberType NoteProperty) {
+                            $bodyItem | Add-Member -Name $property.Name -Value $body.$($property.Name) -MemberType NoteProperty
+                        }
+
+                        $item.Body = $bodyItem
+                    }
+
+                    if ($record.SystemProperties) {
+                        $systemPropertiesItem = New-Object PSObject
+                        foreach ($key in $record.SystemProperties.Keys) {
+                            $systemPropertiesItem | Add-Member -Name $key -Value $record.SystemProperties.$key -MemberType NoteProperty
+                        }
+
+                        $item.SystemProperties = $systemPropertiesItem
+                    }
+
+                    if ($record.AppProperties) {
+                        $appPropertiesItem = New-Object PSObject
+                        foreach ($key in $record.SystemProperties.Keys) {
+                            $appPropertiesItem | Add-Member -Name $key -Value $record.SystemProperties.$key -MemberType NoteProperty
+                        }
+
+                        $item.SystemProperties = $appPropertiesItem
+                    }
                 }
+                $items += $item
             }
             $stream.Dispose()
             $reader.Dispose()
         }
     }
     end {
-        $items | ConvertFrom-Json
+        $items
     }
 }
